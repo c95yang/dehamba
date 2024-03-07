@@ -16,18 +16,13 @@ class DeHambaNet(nn.Module):
                  img_size=64,
                  patch_size=1,
                  in_chans=3,
-                 embed_dim=96,
-                 depths=(6, 6, 6, 6),
-                 #drop_rate=0.,
+                 embed_dim=48,
+                 depths=(2, 2, 2, 2),
                  d_state = 16,
                  mlp_ratio=2.,
-                 drop_path_rate=0.1,
-                 norm_layer=nn.LayerNorm,
-                 patch_norm=True,
                  use_checkpoint=True,
                  upscale=2,
-                 img_range=1.,
-                 upsampler=''):
+                 img_range=1.):
         super(DeHambaNet, self).__init__()
         factory_kwargs = {"device": 'cuda', "dtype": None}
         num_in_ch = in_chans
@@ -40,15 +35,14 @@ class DeHambaNet(nn.Module):
         else:
             self.mean = torch.zeros(1, 1, 1, 1, **factory_kwargs)
         self.upscale = upscale
-        self.upsampler = upsampler
         self.mlp_ratio=mlp_ratio
-        # ------------------------- 1, shallow feature extraction ------------------------- #
+
         self.conv_first = nn.Conv2d(num_in_ch, embed_dim, 3, 1, 1, **factory_kwargs) # 3 -> 96
+        self.conv_last = nn.Conv2d(embed_dim, num_out_ch, 3, 1, 1, device='cuda') # 96 -> 3
 
         # ------------------------- 2, deep feature extraction ------------------------- #
         self.num_layers = 1
         self.embed_dim = embed_dim
-        self.patch_norm = patch_norm
         self.num_features = embed_dim
 
         # transfer 2D feature map into 1D token sequence, pay attention to whether using normalization
@@ -56,8 +50,7 @@ class DeHambaNet(nn.Module):
             img_size=img_size,
             patch_size=patch_size,
             in_chans=embed_dim,
-            embed_dim=embed_dim,
-            norm_layer=norm_layer if self.patch_norm else None)
+            embed_dim=embed_dim)
         
         self.patches_resolution = self.patch_embed.patches_resolution
 
@@ -68,49 +61,21 @@ class DeHambaNet(nn.Module):
             in_chans=embed_dim,
             embed_dim=embed_dim)
 
-        #self.pos_drop = nn.Dropout(p=drop_rate)
-        # self.is_light_sr = True if self.upsampler=='pixelshuffledirect' else False
-        # stochastic depth
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
-
         # build Residual State Space Group (RSSG)
         self.layers = nn.ModuleList()
         for i_layer in range(self.num_layers): 
             layer = ResidualGroup(
-                dim=embed_dim,
+                embed_dim=embed_dim,
                 input_resolution=(self.patches_resolution),
-                depth=depths[i_layer],
+                depth=depths[i_layer], #6
                 d_state = d_state,
                 mlp_ratio=self.mlp_ratio,
-                drop_path=dpr[sum(depths[:i_layer]):sum(depths[:i_layer + 1])],  # no impact on SR results
-                norm_layer=norm_layer,
-                downsample=None,
                 use_checkpoint=use_checkpoint,
                 img_size=img_size,
                 patch_size=patch_size,
-                #resi_connection=resi_connection,
-                #is_light_sr = self.is_light_sr
+                in_chans=in_chans
             )
             self.layers.append(layer)
-        self.norm = norm_layer(self.num_features, **factory_kwargs)
-
-        # build the last conv layer in the end of all residual groups
-        #if resi_connection == '1conv':
-            #self.conv_after_body = nn.Conv2d(embed_dim, embed_dim, 3, 1, 1, device='cuda')
-
-        # -------------------------3. high-quality image reconstruction ------------------------ #
-        if self.upsampler == 'pixelshuffle':
-            # for classical SR
-            #self.conv_before_upsample = nn.Sequential(nn.Conv2d(embed_dim, num_feat, 3, 1, 1, device='cuda'), nn.LeakyReLU(inplace=True))
-            self.upsample = Upsample(upscale, num_feat)
-            #self.conv_last = nn.Conv2d(num_feat, num_out_ch, 3, 1, 1, device='cuda')
-        elif self.upsampler == 'pixelshuffledirect':
-            # for lightweight SR (to save parameters)
-            self.upsample = UpsampleOneStep(upscale, embed_dim, num_out_ch)
-
-        else:
-            # for image denoising
-            self.conv_last = nn.Conv2d(embed_dim, num_out_ch, 3, 1, 1, device='cuda') # 96 -> 3
 
         self.apply(self._init_weights)
 
@@ -134,13 +99,12 @@ class DeHambaNet(nn.Module):
     def forward_features(self, x):
         x_size = (x.shape[2], x.shape[3])
         x.to('cuda')
-        x = self.patch_embed(x) # N,L,C
+        x = self.patch_embed(x) # N,L,C  [4, 96, 64, 64] -> [4, 4096, 96]
 
         for layer in self.layers:
             x = layer(x, x_size)
 
-        x = self.norm(x)  # b seq_len c
-        x = self.patch_unembed(x, x_size)
+        x = self.patch_unembed(x, x_size) # [4, 4096, 96] -> [4, 96, 64, 64]
 
         return x
 
@@ -149,24 +113,9 @@ class DeHambaNet(nn.Module):
         x = (x - self.mean) * self.img_range
         x.to("cuda")
 
-        if self.upsampler == 'pixelshuffle':
-            # for classical SR
-            x = self.conv_first(x)
-            #x = self.conv_after_body(self.forward_features(x)) + x
-            x = self.conv_before_upsample(x)
-            x = self.conv_last(self.upsample(x))
-
-        elif self.upsampler == 'pixelshuffledirect':
-            # for lightweight SR
-            #x = self.conv_first(x)
-            #x = self.conv_after_body(self.forward_features(x)) + x
-            x = self.upsample(x)
-
-        else:
-            # for image denoising
-            x_first = self.conv_first(x)
-            res = self.forward_features(x_first) + x_first
-            x = x + self.conv_last(res)
+        x_first = self.conv_first(x)
+        res = self.forward_features(x_first) + x_first
+        x = x + self.conv_last(res)
 
         x = x / self.img_range + self.mean
 
@@ -180,5 +129,4 @@ class DeHambaNet(nn.Module):
         for layer in self.layers:
             flops += layer.flops()
         flops += h * w * 3 * self.embed_dim * self.embed_dim
-        flops += self.upsample.flops()
         return flops

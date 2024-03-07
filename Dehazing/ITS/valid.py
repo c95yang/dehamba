@@ -21,7 +21,7 @@ def _valid(model, args, ep):
             input_img = input_img.to(device)
 
             h, w = input_img.shape[2], input_img.shape[3]
-            H, W = ((h+factor)//factor)*factor, ((w+factor)//factor*factor) #?? same??
+            H, W = ((h+factor)//factor)*factor, ((w+factor)//factor*factor)
             padh = H-h if h%factor!=0 else 0
             padw = W-w if w%factor!=0 else 0
             input_img = f.pad(input_img, (0, padw, 0, padh), 'reflect')
@@ -29,14 +29,14 @@ def _valid(model, args, ep):
             if not os.path.exists(os.path.join(args.result_dir, '%d' % (ep))):
                 os.mkdir(os.path.join(args.result_dir, '%d' % (ep)))
 
-            pred = model(input_img)[2]
+            pred = model(input_img)
             pred = pred[:,:,:h,:w]
 
             pred_clip = torch.clamp(pred, 0, 1) #why clamp? try to print out pred and pred_clip
             p_numpy = pred_clip.squeeze(0).cpu().numpy()
             label_numpy = label_img.squeeze(0).cpu().numpy()
 
-            psnr = peak_signal_noise_ratio(p_numpy, label_numpy, data_range=1) #why data_range=1?
+            psnr = peak_signal_noise_ratio(p_numpy, label_numpy, data_range=1) 
 
             psnr_adder(psnr)
             # print('\r%03d'%idx, end=' ')
