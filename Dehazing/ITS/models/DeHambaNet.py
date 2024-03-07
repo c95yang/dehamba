@@ -10,10 +10,8 @@ def build_net(model_name):
     class ModelError(Exception):
         def __init__(self, msg):
             self.msg = msg
-
         def __str__(self):
             return self.msg
-
     return DeHambaNet()
 
 class DeHambaNet(nn.Module):
@@ -29,15 +27,12 @@ class DeHambaNet(nn.Module):
                  drop_path_rate=0.1,
                  norm_layer=nn.LayerNorm,
                  patch_norm=True,
-                 use_checkpoint=False,
+                 use_checkpoint=True,
                  upscale=2,
                  img_range=1.,
-                 upsampler='',
-                 #resi_connection='1conv',
-                 device = "cuda",
-                 dtype = None):
+                 upsampler=''):
         super(DeHambaNet, self).__init__()
-        factory_kwargs = {"device": device, "dtype": dtype}
+        factory_kwargs = {"device": 'cuda', "dtype": None}
         num_in_ch = in_chans
         num_out_ch = in_chans
         num_feat = 64
@@ -51,14 +46,13 @@ class DeHambaNet(nn.Module):
         self.upsampler = upsampler
         self.mlp_ratio=mlp_ratio
         # ------------------------- 1, shallow feature extraction ------------------------- #
-        self.conv_first = nn.Conv2d(num_in_ch, embed_dim, 3, 1, 1, **factory_kwargs)
+        self.conv_first = nn.Conv2d(num_in_ch, embed_dim, 3, 1, 1, **factory_kwargs) # 3 -> 96
 
         # ------------------------- 2, deep feature extraction ------------------------- #
         self.num_layers = 1
         self.embed_dim = embed_dim
         self.patch_norm = patch_norm
         self.num_features = embed_dim
-
 
         # transfer 2D feature map into 1D token sequence, pay attention to whether using normalization
         self.patch_embed = PatchEmbed(
@@ -68,29 +62,26 @@ class DeHambaNet(nn.Module):
             embed_dim=embed_dim,
             norm_layer=norm_layer if self.patch_norm else None)
         
-        num_patches = self.patch_embed.num_patches
-        patches_resolution = self.patch_embed.patches_resolution
-        self.patches_resolution = patches_resolution
+        self.patches_resolution = self.patch_embed.patches_resolution
 
         # return 2D feature map from 1D token sequence
         self.patch_unembed = PatchUnEmbed(
             img_size=img_size,
             patch_size=patch_size,
             in_chans=embed_dim,
-            embed_dim=embed_dim,
-            norm_layer=norm_layer if self.patch_norm else None)
+            embed_dim=embed_dim)
 
         #self.pos_drop = nn.Dropout(p=drop_rate)
-        self.is_light_sr = True if self.upsampler=='pixelshuffledirect' else False
+        # self.is_light_sr = True if self.upsampler=='pixelshuffledirect' else False
         # stochastic depth
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
 
         # build Residual State Space Group (RSSG)
         self.layers = nn.ModuleList()
-        for i_layer in range(self.num_layers): # 6-layer
+        for i_layer in range(self.num_layers): 
             layer = ResidualGroup(
                 dim=embed_dim,
-                input_resolution=(patches_resolution[0], patches_resolution[1]),
+                input_resolution=(self.patches_resolution),
                 depth=depths[i_layer],
                 d_state = d_state,
                 mlp_ratio=self.mlp_ratio,
@@ -101,7 +92,7 @@ class DeHambaNet(nn.Module):
                 img_size=img_size,
                 patch_size=patch_size,
                 #resi_connection=resi_connection,
-                is_light_sr = self.is_light_sr
+                #is_light_sr = self.is_light_sr
             )
             self.layers.append(layer)
         self.norm = norm_layer(self.num_features, **factory_kwargs)
@@ -122,7 +113,7 @@ class DeHambaNet(nn.Module):
 
         else:
             # for image denoising
-            self.conv_last = nn.Conv2d(embed_dim, num_out_ch, 3, 1, 1, device='cuda')
+            self.conv_last = nn.Conv2d(embed_dim, num_out_ch, 3, 1, 1, device='cuda') # 96 -> 3
 
         self.apply(self._init_weights)
 
@@ -147,8 +138,6 @@ class DeHambaNet(nn.Module):
         x_size = (x.shape[2], x.shape[3])
         x.to('cuda')
         x = self.patch_embed(x) # N,L,C
-
-        #x = self.pos_drop(x)
 
         for layer in self.layers:
             x = layer(x, x_size)

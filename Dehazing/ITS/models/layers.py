@@ -388,9 +388,8 @@ class VSSBlock(nn.Module):
             attn_drop_rate: float = 0,
             d_state: int = 16,
             expand: float = 2.,
-            is_light_sr: bool = False,
-            **kwargs,
-    ):
+            is_light_sr: bool = False
+            ):
         super().__init__()
         self.ln_1 = norm_layer(hidden_dim, device="cuda")
         self.self_attention = SS2D(d_model=hidden_dim, d_state=d_state,expand=expand,dropout=attn_drop_rate)
@@ -435,7 +434,7 @@ class BasicLayer(nn.Module):
                  mlp_ratio=2.,
                  norm_layer=nn.LayerNorm,
                  downsample=None,
-                 use_checkpoint=False,is_light_sr=False):
+                 use_checkpoint=True):
 
         super().__init__()
         self.dim = dim
@@ -454,7 +453,8 @@ class BasicLayer(nn.Module):
                 attn_drop_rate=0,
                 d_state=d_state,
                 expand=self.mlp_ratio,
-                input_resolution=input_resolution,is_light_sr=is_light_sr))
+                #input_resolution=input_resolution
+                ))
 
         # patch merging layer
         if downsample is not None:
@@ -465,7 +465,7 @@ class BasicLayer(nn.Module):
     def forward(self, x, x_size):
         for blk in self.blocks:
             if self.use_checkpoint:
-                x = checkpoint.checkpoint(blk, x)
+                x = checkpoint.checkpoint(blk, x, x_size)
             else:
                 x = blk(x, x_size)
         if self.downsample is not None:
@@ -510,11 +510,10 @@ class ResidualGroup(nn.Module):
                  drop_path=0.,
                  norm_layer=nn.LayerNorm,
                  downsample=None,
-                 use_checkpoint=False,
+                 use_checkpoint=True,
                  img_size=None,
-                 patch_size=None,
-                 resi_connection='1conv',
-                 is_light_sr = False):
+                 patch_size=None
+                 ):
         super(ResidualGroup, self).__init__()
 
         self.dim = dim
@@ -529,21 +528,21 @@ class ResidualGroup(nn.Module):
             drop_path=drop_path,
             norm_layer=norm_layer,
             downsample=downsample,
-            use_checkpoint=use_checkpoint,
-            is_light_sr = is_light_sr)
+            use_checkpoint=use_checkpoint
+            )
 
         # build the last conv layer in each residual state space group
-        if resi_connection == '1conv':
-            self.conv = nn.Conv2d(dim, dim, 3, 1, 1, device = "cuda")
+        #if resi_connection == '1conv':
+            #self.conv = nn.Conv2d(dim, dim, 3, 1, 1, device = "cuda")
 
         self.patch_embed = PatchEmbed(
             img_size=img_size, patch_size=patch_size, in_chans=0, embed_dim=dim, norm_layer=None)
 
         self.patch_unembed = PatchUnEmbed(
-            img_size=img_size, patch_size=patch_size, in_chans=0, embed_dim=dim, norm_layer=None)
+            img_size=img_size, patch_size=patch_size, in_chans=0, embed_dim=dim)
 
     def forward(self, x, x_size):
-        return self.patch_embed(self.conv(self.patch_unembed(self.residual_group(x, x_size), x_size))) + x
+        return self.patch_embed(self.patch_unembed(self.residual_group(x, x_size), x_size)) + x
 
     def flops(self):
         flops = 0
@@ -611,7 +610,7 @@ class PatchUnEmbed(nn.Module):
         norm_layer (nn.Module, optional): Normalization layer. Default: None
     """
 
-    def __init__(self, img_size=224, patch_size=4, in_chans=3, embed_dim=96, norm_layer=None):
+    def __init__(self, img_size=224, patch_size=4, in_chans=3, embed_dim=96):
         super().__init__()
         img_size = to_2tuple(img_size)
         patch_size = to_2tuple(patch_size)
