@@ -3,31 +3,9 @@ import math
 import torch.nn as nn
 import torch.utils.checkpoint as checkpoint
 import torch.nn.functional as F
-from functools import partial
-from typing import Optional, Callable
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 from einops import rearrange, repeat
 from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, selective_scan_ref
-
-    
-NEG_INF = -1000000
-
-
-class Mlp(nn.Module):
-    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU):
-        super().__init__()
-        out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
-        self.fc1 = nn.Linear(in_features, hidden_features)
-        self.act = act_layer()
-        self.fc2 = nn.Linear(hidden_features, out_features)
-
-    def forward(self, x):
-        x = self.fc1(x)
-        x = self.act(x)
-        x = self.fc2(x)
-        return x
-
 
 class SS2D(nn.Module):
     def __init__(
@@ -209,69 +187,25 @@ class SS2D(nn.Module):
         return out
 
 
-class VSSBlock(nn.Module):
-    def __init__(
-            self,
-            hidden_dim: int,
-            attn_drop_rate: float,
-            d_state: int,
-            expand: float
-            ):
-        super().__init__()
-        self.ss2d = SS2D(d_model=hidden_dim, d_state=d_state,expand=expand,dropout=attn_drop_rate)
-
-    def forward(self, input, x_size):
-        # x [B,HW,C]
-        B, L, C = input.shape
-        input = input.view(B, *x_size, C).contiguous()  # [B,H,W,C]
-        x = input + self.ss2d(input)
-        x = x.view(B, -1, C).contiguous()
-        return x
-
-
 class BasicLayer(nn.Module):
-    """ The Basic MambaIR Layer in one Residual State Space Group
-    Args:
-        dim (int): Number of input channels.
-        input_resolution (tuple[int]): Input resolution.
-        depth (int): Number of blocks.
-        mlp_ratio (float): Ratio of mlp hidden dim to embedding dim.
-        drop_path (float | tuple[float], optional): Stochastic depth rate. Default: 0.0
-        norm_layer (nn.Module, optional): Normalization layer. Default: nn.LayerNorm
-        downsample (nn.Module | None, optional): Downsample layer at the end of the layer. Default: None
-        use_checkpoint (bool): Whether to use checkpointing to save memory. Default: False.
-    """
-
     def __init__(self,
                  embed_dim,
                  input_resolution,
-                 depth,
                  d_state,
-                 mlp_ratio,
                  use_checkpoint):
 
         super().__init__()
         self.input_resolution = input_resolution
-        self.depth = depth
-        self.mlp_ratio=mlp_ratio
         self.use_checkpoint = use_checkpoint
+        self.ss2d = SS2D(d_model=embed_dim, d_state=d_state)
 
-        # build blocks
-        self.blocks = nn.ModuleList()
-        for i in range(depth):
-            self.blocks.append(VSSBlock(
-                hidden_dim=embed_dim,
-                attn_drop_rate=0,
-                d_state=d_state,
-                expand=self.mlp_ratio,
-                ))
 
     def forward(self, x, x_size):
-        for blk in self.blocks:
-            if self.use_checkpoint:
-                x = checkpoint.checkpoint(blk, x, x_size)
-            else:
-                x = blk(x, x_size)
+        # x [B,HW,C]
+        B, L, C = x.shape
+        x = x.view(B, *x_size, C).contiguous()  # [B,H,W,C]
+        x = x + self.ss2d(x)
+        x = x.view(B, -1, C).contiguous()
         return x
 
     def flops(self):
@@ -284,9 +218,7 @@ class BasicLayer(nn.Module):
 class ResidualGroup(nn.Module):
     def __init__(self,
                  input_resolution,
-                 depth,
                  d_state,
-                 mlp_ratio,
                  use_checkpoint,
                  img_size,
                  patch_size,
@@ -299,9 +231,7 @@ class ResidualGroup(nn.Module):
         self.residual_group = BasicLayer(
             embed_dim = embed_dim,
             input_resolution=input_resolution,
-            depth=depth,
             d_state = d_state,
-            mlp_ratio=mlp_ratio,
             use_checkpoint=use_checkpoint
             )
 

@@ -32,7 +32,7 @@ def _valid(model, args, ep):
             pred = model(input_img)
             pred = pred[:,:,:h,:w]
 
-            pred_clip = torch.clamp(pred, 0, 1) #why clamp? try to print out pred and pred_clip
+            pred_clip = torch.clamp(pred, 0, 1) 
             p_numpy = pred_clip.squeeze(0).cpu().numpy()
             label_numpy = label_img.squeeze(0).cpu().numpy()
 
@@ -41,6 +41,5 @@ def _valid(model, args, ep):
             psnr_adder(psnr)
             # print('\r%03d'%idx, end=' ')
 
-    # print('\n')
     model.train()
     return psnr_adder.average()

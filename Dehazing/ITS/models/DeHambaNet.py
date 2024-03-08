@@ -17,9 +17,7 @@ class DeHambaNet(nn.Module):
                  patch_size=1,
                  in_chans=3,
                  embed_dim=48,
-                 depths=(2, 2, 2, 2),
                  d_state = 16,
-                 mlp_ratio=2.,
                  use_checkpoint=True,
                  upscale=2,
                  img_range=1.):
@@ -27,7 +25,6 @@ class DeHambaNet(nn.Module):
         factory_kwargs = {"device": 'cuda', "dtype": None}
         num_in_ch = in_chans
         num_out_ch = in_chans
-        num_feat = 64
         self.img_range = img_range
         if in_chans == 3:
             rgb_mean = (0.4488, 0.4371, 0.4040)
@@ -35,7 +32,6 @@ class DeHambaNet(nn.Module):
         else:
             self.mean = torch.zeros(1, 1, 1, 1, **factory_kwargs)
         self.upscale = upscale
-        self.mlp_ratio=mlp_ratio
 
         self.conv_first = nn.Conv2d(num_in_ch, embed_dim, 3, 1, 1, **factory_kwargs) # 3 -> 96
         self.conv_last = nn.Conv2d(embed_dim, num_out_ch, 3, 1, 1, device='cuda') # 96 -> 3
@@ -51,8 +47,6 @@ class DeHambaNet(nn.Module):
             patch_size=patch_size,
             in_chans=embed_dim,
             embed_dim=embed_dim)
-        
-        self.patches_resolution = self.patch_embed.patches_resolution
 
         # return 2D feature map from 1D token sequence
         self.patch_unembed = PatchUnEmbed(
@@ -66,10 +60,8 @@ class DeHambaNet(nn.Module):
         for i_layer in range(self.num_layers): 
             layer = ResidualGroup(
                 embed_dim=embed_dim,
-                input_resolution=(self.patches_resolution),
-                depth=depths[i_layer], #6
+                input_resolution=(self.patch_embed.patches_resolution),
                 d_state = d_state,
-                mlp_ratio=self.mlp_ratio,
                 use_checkpoint=use_checkpoint,
                 img_size=img_size,
                 patch_size=patch_size,
